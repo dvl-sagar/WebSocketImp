@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test UI</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            text-align: center;
+        }
+        input, button {
+            padding: 10px;
+            margin: 10px;
+            font-size: 16px;
+        }
+        #output {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            background: #f9f9f9;
+            min-height: 100px;
+        }
+        .log {
+            text-align: left;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h2>WebSocket Request Tester</h2>
+    
+    <input type="text" id="message" placeholder="Enter message">
+    <button onclick="sendNewRequest()">Send Request</button>
+
+    <input type="text" id="fetchId" placeholder="Enter Request ID">
+    <button onclick="fetchResult()">Fetch Result</button>
+
+    <p><strong>Response Log:</strong></p>
+    <div id="output" class="log"></div>
+
+    <script>
+        let socket;
+        let reconnectInterval = 2000; // 2 seconds
+
+        function logMessage(message) {
+            let output = document.getElementById("output");
+            output.innerHTML += `<p>${message}</p>`;
+        }
+
+        function connectWebSocket() {
+            socket = new WebSocket("ws://localhost:8080/ws");
+
+            socket.onopen = function() {
+                logMessage("✅ Connected to WebSocket!");
+            };
+
+            socket.onmessage = function(event) {
+                let response = JSON.parse(event.data);
+                
+                if (response.result) {
+                    logMessage(`✅ Result Received: ${response.result}`);
+                } else if (response._id) {
+                    logMessage(`🆕 Request ID: ${response._id}`);
+                    document.getElementById("fetchId").value = response._id;
+                } else if (response.pending) {
+                    logMessage(`🔄 Server sent pending request IDs: ${response.pending.join(", ")}`);
+                    response.pending.forEach(id => fetchResult(id));
+                }
+            };
+
+            socket.onclose = function() {
+                logMessage("⚠️ WebSocket disconnected! Reconnecting...");
+                setTimeout(connectWebSocket, reconnectInterval);
+            };
+        }
+
+        function sendNewRequest() {
+            let msg = document.getElementById("message").value;
+            if (!msg.trim()) {
+                alert("Please enter a message before sending.");
+                return;
+            }
+            socket.send(JSON.stringify({ _id: "", data: msg }));
+        }
+
+        function fetchResult() {
+            let reqId = document.getElementById("fetchId").value;
+            if (!reqId.trim()) {
+                alert("Please enter a Request ID to fetch the result.");
+                return;
+            }
+            socket.send(JSON.stringify({ _id: reqId, data: "" }));
+        }
+
+        // ✅ Start WebSocket connection
+        connectWebSocket();
+    </script>
+</body>
+</html>

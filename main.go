@@ -13,7 +13,12 @@ func main() {
 	http.Handle("/ws", server.RequestServer{
 		Logf: log.Printf,
 	})
-	log.Println("WebSocket server started on ws://localhost:8080/ws")
+	fs := http.FileServer(http.Dir("./static"))
+	http.Handle("/", fs)
+
+	log.Println("Server started on http://localhost:8080")
+	log.Println("WebSocket running on ws://localhost:8080/ws")
+	// log.Println("WebSocket server started on ws://localhost:8080/ws")
 	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
