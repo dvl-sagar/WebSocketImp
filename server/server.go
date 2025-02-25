@@ -3,105 +3,117 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"fmt"
 	"net/http"
-	"sync"
 	"time"
+
+	"websocket-server/processor"
+	"websocket-server/storage"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
-	"websocket-server/processor"
-	"websocket-server/storage"
+	"golang.org/x/time/rate"
 )
 
-var clients = make(map[*websocket.Conn]bool)
-var mu sync.Mutex
-
-type Request struct {
-	// Type string `json:"type"` // "new" or "fetch"
-	ID   string `json:"_id"`
-	Data string `json:"data,omitempty"`
+// requestServer handles WebSocket connections for processing requests.
+type RequestServer struct {
+	Logf func(f string, v ...interface{})
 }
 
-type Response struct {
-	ID     string `json:"_id"`
-	Result string `json:"result,omitempty"`
-	Error  string `json:"error,omitempty"`
-}
-
-func HandleConnections(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		Subprotocols: []string{"json"},
+// ServeHTTP handles incoming WebSocket connections.
+func (s RequestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		Subprotocols: []string{"requests"},
 	})
 	if err != nil {
-		log.Println("WebSocket upgrade error:", err)
+		s.Logf("%v", err)
 		return
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "Closing connection")
+	defer c.CloseNow()
 
-	mu.Lock()
-	clients[conn] = true
-	mu.Unlock()
+	// Enforce subprotocol (optional)
+	if c.Subprotocol() != "requests" {
+		c.Close(websocket.StatusPolicyViolation, "client must speak the requests subprotocol")
+		return
+	}
+
+	// Limit: 1 request per 100ms with burst capacity of 10
+	l := rate.NewLimiter(rate.Every(time.Millisecond*100), 10)
 
 	for {
-		var req Request
-		_, data, err := conn.Read(r.Context())
+		err = handleRequest(c, l)
+		if websocket.CloseStatus(err) == websocket.StatusNormalClosure {
+			return
+		}
 		if err != nil {
-			log.Println("Read error:", err)
-			mu.Lock()
-			delete(clients, conn)
-			mu.Unlock()
-			break
-		}
-
-		if err := json.Unmarshal(data, &req); err != nil {
-			log.Println("Invalid JSON format")
-			continue
-		}
-
-		if req.ID == "" {
-			handleNewRequest(conn, req.Data)
-		} else if req.ID != "" {
-			handleFetchRequest(conn, req.ID)
+			s.Logf("Failed to process request from %v: %v", r.RemoteAddr, err)
+			return
 		}
 	}
 }
 
-func handleNewRequest(conn *websocket.Conn, data string) {
-	id := uuid.New().String()
-	storage.SaveRequest(id, data)
-
-	resp := Response{ID: id}
-	sendJSON(conn, resp)
-
-	go func() {
-		result := processor.Process(data)
-		storage.SaveResult(id, result)
-
-		mu.Lock()
-		if _, ok := clients[conn]; ok {
-			sendJSON(conn, Response{ID: id, Result: result})
-		}
-		mu.Unlock()
-	}()
-}
-
-func handleFetchRequest(conn *websocket.Conn, id string) {
-	result, exists := storage.GetResult(id)
-	if !exists {
-		sendJSON(conn, Response{ID: id, Error: "Request ID not found"})
-		return
-	}
-	sendJSON(conn, Response{ID: id, Result: result})
-}
-
-func sendJSON(conn *websocket.Conn, data interface{}) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// handleRequest processes incoming WebSocket messages.
+func handleRequest(c *websocket.Conn, l *rate.Limiter) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	jsonData, _ := json.Marshal(data)
-	err := conn.Write(ctx, websocket.MessageText, jsonData)
-	if err != nil {
-		log.Println("Write error:", err)
+	// Apply rate limiting
+	if err := l.Wait(ctx); err != nil {
+		return err
 	}
+
+	// Read message from client
+	typ, r, err := c.Reader(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Read JSON request
+	var req struct {
+		Type string `json:"type"` // "new" or "fetch"
+		ID   string `json:"id,omitempty"`
+		Data string `json:"data,omitempty"`
+	}
+	if err := json.NewDecoder(r).Decode(&req); err != nil {
+		return fmt.Errorf("failed to decode JSON: %w", err)
+	}
+
+	// Handle request
+	var resp struct {
+		ID     string `json:"id"`
+		Result string `json:"result,omitempty"`
+		Error  string `json:"error,omitempty"`
+	}
+
+	if req.Type == "new" {
+		// Generate request ID, store request, send response
+		resp.ID = uuid.New().String()
+		storage.SaveRequest(resp.ID, req.Data)
+
+		go func(requestID, requestData string) {
+			result := processor.Process(requestData)
+			storage.SaveResult(requestID, result)
+		}(resp.ID, req.Data)
+
+	} else if req.Type == "fetch" {
+		// Fetch stored result
+		result, exists := storage.GetResult(req.ID)
+		if exists {
+			resp.ID = req.ID
+			resp.Result = result
+		} else {
+			resp.ID = req.ID
+			resp.Error = "Request ID not found"
+		}
+	}
+
+	// Send response
+	w, err := c.Writer(ctx, typ)
+	if err != nil {
+		return err
+	}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		return fmt.Errorf("failed to encode JSON: %w", err)
+	}
+	return w.Close()
 }

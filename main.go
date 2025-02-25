@@ -10,8 +10,9 @@ import (
 func main() {
 	storage.InitDB()
 
-	http.HandleFunc("/ws", server.HandleConnections)
-
+	http.Handle("/ws", server.RequestServer{
+		Logf: log.Printf,
+	})
 	log.Println("WebSocket server started on ws://localhost:8080/ws")
 	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
