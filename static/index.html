@@ -19,6 +19,10 @@
             border: 1px solid #ddd;
             background: #f9f9f9;
             min-height: 100px;
+            max-height: 300px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column-reverse; /* ✅ Show latest messages on top */
         }
         .log {
             text-align: left;
@@ -28,7 +32,9 @@
 </head>
 <body>
     <h2>WebSocket Request Tester</h2>
-    
+
+    <button onclick="toggleWebSocket()">🔄 Connect / Disconnect</button>
+
     <input type="text" id="message" placeholder="Enter message">
     <button onclick="sendNewRequest()">Send Request</button>
 
@@ -39,24 +45,35 @@
     <div id="output" class="log"></div>
 
     <script>
-        let socket;
-        let reconnectInterval = 2000; // 2 seconds
+        let socket = null;
+        let isConnected = false;
 
         function logMessage(message) {
             let output = document.getElementById("output");
-            output.innerHTML += `<p>${message}</p>`;
+            let p = document.createElement("p");
+            p.innerHTML = message;
+            output.prepend(p); // ✅ Show latest messages at the top
+        }
+
+        function toggleWebSocket() {
+            if (isConnected) {
+                socket.close();
+            } else {
+                connectWebSocket();
+            }
         }
 
         function connectWebSocket() {
             socket = new WebSocket("ws://localhost:8080/ws");
 
             socket.onopen = function() {
+                isConnected = true;
                 logMessage("✅ Connected to WebSocket!");
             };
 
             socket.onmessage = function(event) {
                 let response = JSON.parse(event.data);
-                
+
                 if (response.result) {
                     logMessage(`✅ Result Received: ${response.result}`);
                 } else if (response._id) {
@@ -69,12 +86,16 @@
             };
 
             socket.onclose = function() {
-                logMessage("⚠️ WebSocket disconnected! Reconnecting...");
-                setTimeout(connectWebSocket, reconnectInterval);
+                isConnected = false;
+                logMessage("⚠️ WebSocket Disconnected!");
             };
         }
 
         function sendNewRequest() {
+            if (!isConnected) {
+                alert("WebSocket is not connected. Click the toggle button to connect.");
+                return;
+            }
             let msg = document.getElementById("message").value;
             if (!msg.trim()) {
                 alert("Please enter a message before sending.");
@@ -84,6 +105,10 @@
         }
 
         function fetchResult() {
+            if (!isConnected) {
+                alert("WebSocket is not connected. Click the toggle button to connect.");
+                return;
+            }
             let reqId = document.getElementById("fetchId").value;
             if (!reqId.trim()) {
                 alert("Please enter a Request ID to fetch the result.");
@@ -91,9 +116,6 @@
             }
             socket.send(JSON.stringify({ _id: reqId, data: "" }));
         }
-
-        // ✅ Start WebSocket connection
-        connectWebSocket();
     </script>
 </body>
 </html>
