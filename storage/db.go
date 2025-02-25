@@ -5,6 +5,8 @@ import (
 	"log"
 	"time"
 
+	md "websocket-server/model"
+
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -14,15 +16,15 @@ import (
 var client *mongo.Client
 var collection *mongo.Collection
 
-type Request struct {
+type DbRequest struct {
 	ID          string    `bson:"_id"`
-	RequestData string    `bson:"requestData"`
+	RequestData any       `bson:"requestData"`
 	ResultData  string    `bson:"resultData,omitempty"`
 	Status      string    `bson:"status"`
 	CreatedAt   time.Time `bson:"createdAt"`
 }
 
-func InitDB() {
+func ConnectDB() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -42,11 +44,11 @@ func InitDB() {
 	log.Println("Connected to MongoDB")
 }
 
-func SaveRequest(id, data string) {
-	req := Request{
-		ID:          id,
+func SaveRequest(ID string, data interface{}) {
+	req := DbRequest{
+		ID:          ID,
 		RequestData: data,
-		Status:      "pending",
+		Status:      "in-progress",
 		CreatedAt:   time.Now(),
 	}
 
@@ -67,10 +69,32 @@ func SaveResult(id, result string) {
 }
 
 func GetResult(id string) (string, bool) {
-	var req Request
+	var req DbRequest
 	err := collection.FindOne(context.TODO(), bson.M{"_id": id}).Decode(&req)
 	if err != nil {
 		return "", false
 	}
 	return req.ResultData, true
+}
+func GetPendingRequests() []string {
+	var pendingIDs []string
+
+	ctx := context.Background()
+
+	cursor, err := collection.Find(ctx, bson.M{"status": "in-progress"})
+	if err != nil {
+		log.Println("Error fetching pending requests:", err)
+		return nil
+	}
+	defer cursor.Close(ctx)
+
+	for cursor.Next(ctx) {
+		var req md.PendingRequest
+		if err := cursor.Decode(&req); err != nil {
+			log.Println("Error decoding pending request:", err)
+			continue
+		}
+		pendingIDs = append(pendingIDs, req.ID)
+	}
+	return pendingIDs
 }

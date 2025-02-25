@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	storage.InitDB()
+	storage.ConnectDB()
 
 	http.Handle("/ws", server.RequestServer{
 		Logf: log.Printf,

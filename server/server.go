@@ -10,6 +10,8 @@ import (
 	"websocket-server/processor"
 	"websocket-server/storage"
 
+	md "websocket-server/model"
+
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"golang.org/x/time/rate"
@@ -20,23 +22,36 @@ type RequestServer struct {
 }
 
 func (s RequestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		Subprotocols: []string{"requests"},
-	})
+	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
 	if err != nil {
-		s.Logf("%v", err)
+		s.Logf("WebSocket accept error: %v", err)
 		return
 	}
-	defer func() {
-		c.Close(websocket.StatusNormalClosure, "Closing connection")
-	}()
+	defer c.Close(websocket.StatusNormalClosure, "Closing connection")
 
-	if c.Subprotocol() != "requests" {
-		c.Close(websocket.StatusPolicyViolation, "client must speak the requests subprotocol")
-		return
+	l := rate.NewLimiter(rate.Every(time.Millisecond*100), 10) // Rate limiter
+
+	pendingRequests := storage.GetPendingRequests()
+
+	if len(pendingRequests) > 0 {
+		resp := struct {
+			Pending []string `json:"pending"`
+		}{
+			Pending: pendingRequests,
+		}
+
+		respByte, err := json.Marshal(resp)
+		if err != nil {
+			s.Logf("Error encoding pending requests: %v", err)
+			return
+		}
+
+		err = c.Write(context.Background(), websocket.MessageText, respByte)
+		if err != nil {
+			s.Logf("Error sending pending requests: %v", err)
+			return
+		}
 	}
-
-	l := rate.NewLimiter(rate.Every(time.Millisecond*100), 10)
 
 	for {
 		err = handleRequest(c, l)
@@ -44,47 +59,64 @@ func (s RequestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err != nil {
-			s.Logf("Failed to process request from %v: %v", r.RemoteAddr, err)
+			s.Logf("Request processing error: %v", err)
 			return
 		}
 	}
 }
 
-func handleRequest(c *websocket.Conn, l *rate.Limiter) error {
+func handleRequest(conxn *websocket.Conn, l *rate.Limiter) error {
 	ctx := context.Background()
 
 	if err := l.Wait(ctx); err != nil {
 		return err
 	}
 
-	typ, r, err := c.Reader(ctx)
+	typ, r, err := conxn.Reader(ctx)
 	if err != nil {
 		return err
 	}
 
-	var req struct {
-		// Type string `json:"type"` // "new" or "fetch"
-		ID   string `json:"_id"`
-		Data string `json:"data,omitempty"`
-	}
+	var req md.Request
 	if err := json.NewDecoder(r).Decode(&req); err != nil {
 		return fmt.Errorf("failed to decode JSON: %w", err)
 	}
 
-	var resp struct {
-		ID     string `json:"_id"`
-		Result string `json:"result,omitempty"`
-		Error  string `json:"error,omitempty"`
-	}
+	var resp md.Response
 
 	if req.ID == "" {
-		resp.ID = uuid.New().String()
-		storage.SaveRequest(resp.ID, req.Data)
+		ID := uuid.New().String()
+		storage.SaveRequest(ID, req.Data)
+		resp.ID = ID
 
-		func(requestID, requestData string) {
+		respByte, err := json.Marshal(resp)
+		if err != nil {
+			return err
+		}
+		err = conxn.Write(ctx, typ, respByte)
+		if err != nil {
+			return err
+		}
+
+		func(requestID string, requestData any) {
 			result := processor.Process(requestData)
 			storage.SaveResult(requestID, result)
 		}(resp.ID, req.Data)
+
+		result, exists := storage.GetResult(ID)
+		var newResp md.Response
+		if exists {
+			newResp.ID = ID
+			newResp.Result = result
+		}
+		respByte, err = json.Marshal(newResp)
+		if err != nil {
+			return err
+		}
+		err = conxn.Write(ctx, typ, respByte)
+		if err != nil {
+			return err
+		}
 
 	} else if req.ID != "" {
 		result, exists := storage.GetResult(req.ID)
@@ -95,14 +127,16 @@ func handleRequest(c *websocket.Conn, l *rate.Limiter) error {
 			resp.ID = req.ID
 			resp.Error = "Request ID not found"
 		}
+
+		respByte, err := json.Marshal(resp)
+		if err != nil {
+			return err
+		}
+		err = conxn.Write(ctx, typ, respByte)
+		if err != nil {
+			return err
+		}
 	}
 
-	w, err := c.Writer(ctx, typ)
-	if err != nil {
-		return err
-	}
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		return fmt.Errorf("failed to encode JSON: %w", err)
-	}
-	return w.Close()
+	return nil
 }

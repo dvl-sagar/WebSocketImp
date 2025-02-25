@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-func Process(data interface{}) string {
-	time.Sleep(3 * time.Second) // Simulating processing time
-	return "Processed Request"
+func Process(data any) string {
+	time.Sleep(10 * time.Second) // Simulating processing time
+	return "Request Processed"
 }
