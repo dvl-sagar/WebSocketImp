@@ -1,11 +1,10 @@
 package processor
 
 import (
-	"fmt"
 	"time"
 )
 
-func Process(data string) string {
-	time.Sleep(2 * time.Second) // Simulating processing time
-	return fmt.Sprintf("Processed: %s", data)
+func Process(data interface{}) string {
+	time.Sleep(3 * time.Second) // Simulating processing time
+	return "Processed Request"
 }

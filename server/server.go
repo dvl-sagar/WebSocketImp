@@ -15,12 +15,10 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// requestServer handles WebSocket connections for processing requests.
 type RequestServer struct {
 	Logf func(f string, v ...interface{})
 }
 
-// ServeHTTP handles incoming WebSocket connections.
 func (s RequestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		Subprotocols: []string{"requests"},
@@ -29,15 +27,15 @@ func (s RequestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.Logf("%v", err)
 		return
 	}
-	defer c.CloseNow()
+	defer func() {
+		c.Close(websocket.StatusNormalClosure, "Closing connection")
+	}()
 
-	// Enforce subprotocol (optional)
 	if c.Subprotocol() != "requests" {
 		c.Close(websocket.StatusPolicyViolation, "client must speak the requests subprotocol")
 		return
 	}
 
-	// Limit: 1 request per 100ms with burst capacity of 10
 	l := rate.NewLimiter(rate.Every(time.Millisecond*100), 10)
 
 	for {
@@ -52,51 +50,43 @@ func (s RequestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleRequest processes incoming WebSocket messages.
 func handleRequest(c *websocket.Conn, l *rate.Limiter) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
+	ctx := context.Background()
 
-	// Apply rate limiting
 	if err := l.Wait(ctx); err != nil {
 		return err
 	}
 
-	// Read message from client
 	typ, r, err := c.Reader(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Read JSON request
 	var req struct {
-		Type string `json:"type"` // "new" or "fetch"
-		ID   string `json:"id,omitempty"`
+		// Type string `json:"type"` // "new" or "fetch"
+		ID   string `json:"_id"`
 		Data string `json:"data,omitempty"`
 	}
 	if err := json.NewDecoder(r).Decode(&req); err != nil {
 		return fmt.Errorf("failed to decode JSON: %w", err)
 	}
 
-	// Handle request
 	var resp struct {
-		ID     string `json:"id"`
+		ID     string `json:"_id"`
 		Result string `json:"result,omitempty"`
 		Error  string `json:"error,omitempty"`
 	}
 
-	if req.Type == "new" {
-		// Generate request ID, store request, send response
+	if req.ID == "" {
 		resp.ID = uuid.New().String()
 		storage.SaveRequest(resp.ID, req.Data)
 
-		go func(requestID, requestData string) {
+		func(requestID, requestData string) {
 			result := processor.Process(requestData)
 			storage.SaveResult(requestID, result)
 		}(resp.ID, req.Data)
 
-	} else if req.Type == "fetch" {
-		// Fetch stored result
+	} else if req.ID != "" {
 		result, exists := storage.GetResult(req.ID)
 		if exists {
 			resp.ID = req.ID
@@ -107,7 +97,6 @@ func handleRequest(c *websocket.Conn, l *rate.Limiter) error {
 		}
 	}
 
-	// Send response
 	w, err := c.Writer(ctx, typ)
 	if err != nil {
 		return err
