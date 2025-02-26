@@ -119,7 +119,7 @@ func (h *RequestHandler) sendStoredResult(ctx context.Context, conxn *websocket.
 	return sendResponse(ctx, conxn, typ, resp)
 }
 
-func sendResponse(ctx context.Context, conxn *websocket.Conn, typ websocket.MessageType, resp interface{}) error {
+func sendResponse(ctx context.Context, conxn *websocket.Conn, typ websocket.MessageType, resp any) error {
 	respByte, err := json.Marshal(resp)
 	if err != nil {
 		return err

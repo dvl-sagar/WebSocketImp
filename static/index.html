@@ -1,121 +1,137 @@
 <!DOCTYPE html>
 <html>
-<head>
+  <head>
     <title>WebSocket Test UI</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
-            text-align: center;
-        }
-        input, button {
-            padding: 10px;
-            margin: 10px;
-            font-size: 16px;
-        }
-        #output {
-            margin-top: 20px;
-            padding: 10px;
-            border: 1px solid #ddd;
-            background: #f9f9f9;
-            min-height: 100px;
-            max-height: 300px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column-reverse; /* ✅ Show latest messages on top */
-        }
-        .log {
-            text-align: left;
-            margin-top: 10px;
-        }
+      body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+        text-align: center;
+      }
+      input,
+      button {
+        padding: 10px;
+        margin: 10px;
+        font-size: 16px;
+      }
+      #output {
+        margin-top: 20px;
+        padding: 10px;
+        border: 1px solid #ddd;
+        background: #f9f9f9;
+        min-height: 100px;
+        max-height: 300px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column-reverse; /* ✅ Show latest messages on top */
+      }
+      .log {
+        text-align: left;
+        margin-top: 10px;
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <h2>WebSocket Request Tester</h2>
 
     <button onclick="toggleWebSocket()">🔄 Connect / Disconnect</button>
 
-    <input type="text" id="message" placeholder="Enter message">
+    <input type="text" id="message" placeholder="Enter message" />
     <button onclick="sendNewRequest()">Send Request</button>
 
-    <input type="text" id="fetchId" placeholder="Enter Request ID">
+    <input type="text" id="fetchId" placeholder="Enter Request ID" />
     <button onclick="fetchResult()">Fetch Result</button>
 
     <p><strong>Response Log:</strong></p>
     <div id="output" class="log"></div>
 
     <script>
-        let socket = null;
-        let isConnected = false;
+      let socket = null;
+      let isConnected = false;
 
-        function logMessage(message) {
-            let output = document.getElementById("output");
-            let p = document.createElement("p");
-            p.innerHTML = message;
-            output.prepend(p); // ✅ Show latest messages at the top
+      function logMessage(message) {
+        let output = document.getElementById("output");
+        let p = document.createElement("p");
+        p.innerHTML = message;
+        output.prepend(p); // ✅ Show latest messages at the top
+      }
+
+      function toggleWebSocket() {
+        if (isConnected) {
+          socket.close();
+        } else {
+          connectWebSocket();
         }
+      }
 
-        function toggleWebSocket() {
-            if (isConnected) {
-                socket.close();
-            } else {
-                connectWebSocket();
-            }
+      function connectWebSocket() {
+        socket = new WebSocket("ws://localhost:8080/ws");
+
+        socket.onopen = function () {
+          isConnected = true;
+          console.log("Connected to WebSocket!");
+          logMessage("✅ Connected to WebSocket!");
+        };
+
+        socket.onmessage = function (event) {
+          let response = JSON.parse(event.data);
+
+          if (response.error) {
+            console.log(`⚠️ Error: ${response.error}`);
+            logMessage(`⚠️ Error: ${response.error}`);
+            document.getElementById("fetchId").value = response.error;
+          } else if (response.result) {
+            console.log(`✅ Result Received: ${response.result}`);
+            logMessage(`✅ Result Received: ${response.result}`);
+          } else if (response._id) {
+            console.log(`🆕 Request ID: ${response._id}`);
+            logMessage(`🆕 Request ID: ${response._id}`);
+            document.getElementById("fetchId").value = response._id;
+          } else if (response.pending) {
+            logMessage(
+              `🔄 Server sent pending request IDs: ${response.pending.join(
+                ", "
+              )}`
+            );
+            response.pending.forEach((id) => fetchResult(id));
+          }
+        };
+
+        socket.onclose = function () {
+          isConnected = false;
+          logMessage("⚠️ WebSocket Disconnected!");
+        };
+      }
+
+      function sendNewRequest() {
+        if (!isConnected) {
+          alert(
+            "WebSocket is not connected. Click the toggle button to connect."
+          );
+          return;
         }
-
-        function connectWebSocket() {
-            socket = new WebSocket("ws://localhost:8080/ws");
-
-            socket.onopen = function() {
-                isConnected = true;
-                logMessage("✅ Connected to WebSocket!");
-            };
-
-            socket.onmessage = function(event) {
-                let response = JSON.parse(event.data);
-
-                if (response.result) {
-                    logMessage(`✅ Result Received: ${response.result}`);
-                } else if (response._id) {
-                    logMessage(`🆕 Request ID: ${response._id}`);
-                    document.getElementById("fetchId").value = response._id;
-                } else if (response.pending) {
-                    logMessage(`🔄 Server sent pending request IDs: ${response.pending.join(", ")}`);
-                    response.pending.forEach(id => fetchResult(id));
-                }
-            };
-
-            socket.onclose = function() {
-                isConnected = false;
-                logMessage("⚠️ WebSocket Disconnected!");
-            };
+        let msg = document.getElementById("message").value;
+        if (!msg.trim()) {
+          alert("Please enter a message before sending.");
+          return;
         }
+        socket.send(JSON.stringify({ _id: "", data: msg }));
+      }
 
-        function sendNewRequest() {
-            if (!isConnected) {
-                alert("WebSocket is not connected. Click the toggle button to connect.");
-                return;
-            }
-            let msg = document.getElementById("message").value;
-            if (!msg.trim()) {
-                alert("Please enter a message before sending.");
-                return;
-            }
-            socket.send(JSON.stringify({ _id: "", data: msg }));
+      function fetchResult() {
+        if (!isConnected) {
+          alert(
+            "WebSocket is not connected. Click the toggle button to connect."
+          );
+          return;
         }
-
-        function fetchResult() {
-            if (!isConnected) {
-                alert("WebSocket is not connected. Click the toggle button to connect.");
-                return;
-            }
-            let reqId = document.getElementById("fetchId").value;
-            if (!reqId.trim()) {
-                alert("Please enter a Request ID to fetch the result.");
-                return;
-            }
-            socket.send(JSON.stringify({ _id: reqId, data: "" }));
+        let reqId = document.getElementById("fetchId").value;
+        if (!reqId.trim()) {
+          alert("Please enter a Request ID to fetch the result.");
+          return;
         }
+        socket.send(JSON.stringify({ _id: reqId, data: "" }));
+      }
     </script>
-</body>
+  </body>
 </html>
